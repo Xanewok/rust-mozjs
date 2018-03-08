@@ -59,6 +59,34 @@ use rust::RootedGuard;
 use std::ptr;
 use std::slice;
 
+// Experiment with varying object storage
+use jsapi::Heap;
+use rust::CustomTrace;
+use jsapi::JSTracer;
+
+pub trait JSObjectStorage {}
+
+impl JSObjectStorage for *mut JSObject { }
+impl JSObjectStorage for Box<Heap<*mut JSObject>> { }
+
+pub struct ATypedArray<T: TypedArrayElement, S: JSObjectStorage> {
+    pub object: S, // pub to implement JSTraceable from Servo on Box<Heap<*mut JSObject>> variant
+    computed: Option<(*mut T::Element, u32)>,
+}
+
+unsafe impl<T> CustomTrace for ATypedArray<T, *mut JSObject> where T: TypedArrayElement {
+    fn trace(&self, trc: *mut JSTracer) {
+        self.object.trace(trc);
+    }
+}
+
+fn compile_test() {
+    let a: ATypedArray<Uint8, _> = ATypedArray { object: ptr::null_mut::<JSObject>(), computed: None };
+    let cx: *mut JSContext = ptr::null_mut();
+    auto_root!(in(cx) let aa = a);
+}
+//
+
 pub enum CreateWith<'a, T: 'a> {
     Length(u32),
     Slice(&'a [T]),
