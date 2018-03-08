@@ -17,8 +17,10 @@ use glue::GetUint8ArrayLengthAndData;
 use glue::GetUint8ClampedArrayLengthAndData;
 use jsapi::GetArrayBufferLengthAndData;
 use jsapi::GetArrayBufferViewLengthAndData;
+use jsapi::Heap;
 use jsapi::JSContext;
 use jsapi::JSObject;
+use jsapi::JSTracer;
 use jsapi::JS_GetArrayBufferData;
 use jsapi::JS_GetArrayBufferViewType;
 use jsapi::JS_GetFloat32ArrayData;
@@ -53,13 +55,9 @@ use jsapi::UnwrapUint16Array;
 use jsapi::UnwrapUint32Array;
 use jsapi::UnwrapUint8Array;
 use jsapi::UnwrapUint8ClampedArray;
+use rust::CustomTrace;
 use std::ptr;
 use std::slice;
-
-// Experiment with varying object storage
-use jsapi::Heap;
-use rust::CustomTrace;
-use jsapi::JSTracer;
 
 pub trait JSObjectStorage {
     fn as_raw(&self) -> *mut JSObject;
@@ -79,23 +77,6 @@ impl JSObjectStorage for Box<Heap<*mut JSObject>> {
         boxed
     }
 }
-
-// pub struct ATypedArray<T: TypedArrayElement, S: JSObjectStorage> {
-//     pub object: S, // pub to implement JSTraceable from Servo on Box<Heap<*mut JSObject>> variant
-//     computed: Option<(*mut T::Element, u32)>,
-// }
-//
-// unsafe impl<T> CustomTrace for ATypedArray<T, *mut JSObject> where T: TypedArrayElement {
-//     fn trace(&self, trc: *mut JSTracer) {
-//         self.object.trace(trc);
-//     }
-// }
-//
-// fn compile_test() {
-//     let a: ATypedArray<Uint8, _> = ATypedArray { object: ptr::null_mut::<JSObject>(), computed: None };
-//     let cx: *mut JSContext = ptr::null_mut();
-//     auto_root!(in(cx) let aa = a);
-// }
 
 pub enum CreateWith<'a, T: 'a> {
     Length(u32),
@@ -335,30 +316,28 @@ typed_array_element!(ArrayBufferViewU8,
                      UnwrapArrayBufferView,
                      GetArrayBufferViewLengthAndData);
 
-/// The Uint8ClampedArray type.
-pub type Uint8ClampedArray<S> = TypedArray<ClampedU8, S>;
-/// The Uint8Array type.
-pub type Uint8Array<S> = TypedArray<Uint8, S>;
-/// The Int8Array type.
-pub type Int8Array<S> = TypedArray<Int8, S>;
-/// The Uint16Array type.
-pub type Uint16Array<S> = TypedArray<Uint16, S>;
-/// The Int16Array type.
-pub type Int16Array<S> = TypedArray<Int16, S>;
-/// The Uint32Array type.
-pub type Uint32Array<S> = TypedArray<Uint32, S>;
-/// The Int32Array type.
-pub type Int32Array<S> = TypedArray<Int32, S>;
-/// The Float32Array type.
-pub type Float32Array<S> = TypedArray<Float32, S>;
-/// The Float64Array type.
-pub type Float64Array<S> = TypedArray<Float64, S>;
-/// The ArrayBuffer type.
-pub type ArrayBuffer<S> = TypedArray<ArrayBufferU8, S>;
-/// The ArrayBufferView type
-pub type ArrayBufferView<S> = TypedArray<ArrayBufferViewU8, S>;
+// Default type aliases, uses bare pointer by default, since stack lifetime
+// should be the most common scenario
+macro_rules! array_alias {
+    ($arr: ident, $heap_arr: ident, $elem: ty) => {
+        pub type $arr = TypedArray<$elem, *mut JSObject>;
+        pub type $heap_arr = TypedArray<$elem, Box<Heap<*mut JSObject>>>;
+    }
+}
 
-impl<S: JSObjectStorage> ArrayBufferView<S> {
+array_alias!(Uint8ClampedArray, HeapUint8ClampedArray, ClampedU8);
+array_alias!(Uint8Array, HeapUint8Array, Uint8);
+array_alias!(Int8Array, HeapInt8Array, Int8);
+array_alias!(Uint16Array, HeapUint16Array, Uint16);
+array_alias!(Int16Array, HeapInt16Array, Int16);
+array_alias!(Uint32Array, HeapUint32Array, Uint32);
+array_alias!(Int32Array, HeapInt32Array, Int32);
+array_alias!(Float32Array, HeapFloat32Array, Float32);
+array_alias!(Float64Array, HeapFloat64Array, Float64);
+array_alias!(ArrayBuffer, HeapArrayBuffer, ArrayBufferU8);
+array_alias!(ArrayBufferView, HeapArrayBufferView, ArrayBufferViewU8);
+
+impl<S: JSObjectStorage> TypedArray<ArrayBufferViewU8, S> {
     pub fn get_array_type(&self) -> Type {
         unsafe { JS_GetArrayBufferViewType(self.object.as_raw()) }
     }
@@ -367,11 +346,15 @@ impl<S: JSObjectStorage> ArrayBufferView<S> {
 #[macro_export]
 macro_rules! typedarray {
     (in($cx:expr) let $name:ident : $ty:ident = $init:expr) => {
-        let mut __root = $crate::jsapi::Rooted::new_unrooted();
-        let $name = $crate::typedarray::$ty::from($cx, &mut __root, $init);
+        let mut __array = $crate::typedarray::$ty::from($init)
+            .map($crate::rust::CustomAutoRooter::new);
+
+        let $name = __array.as_mut().map(|ok| ok.root($cx));
     };
     (in($cx:expr) let mut $name:ident : $ty:ident = $init:expr) => {
-        let mut __root = $crate::jsapi::Rooted::new_unrooted();
-        let mut $name = $crate::typedarray::$ty::from($cx, &mut __root, $init);
+        let mut __array = $crate::typedarray::$ty::from($init)
+            .map($crate::rust::CustomAutoRooter::new);
+
+        let mut $name = __array.as_mut().map(|ok| ok.root($cx));
     }
 }
