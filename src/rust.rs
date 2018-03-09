@@ -503,19 +503,6 @@ unsafe impl<T: CustomTrace> CustomTrace for Vec<T> {
     }
 }
 
-unsafe impl<O: CustomTrace, E: CustomTrace> CustomTrace for Result<O, E> {
-    fn trace(&self, trc: *mut JSTracer) {
-        match *self {
-            Ok(ref inner) => inner.trace(trc),
-            Err(ref inner) => inner.trace(trc),
-        }
-    }
-}
-
-unsafe impl CustomTrace for () {
-    fn trace(&self, _: *mut JSTracer) {}
-}
-
 impl AutoGCRooter {
     pub fn new_unrooted(tag: AutoGCRooterTag) -> AutoGCRooter {
         AutoGCRooter {
